@@ -1,0 +1,118 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Crear una VPC, una subred y una instancia EC2 con Docker.
+
+Resources:
+  MyVPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: '10.0.0.0/16'
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: MyVPC
+
+  MyInternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+
+  AttachGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyInternetGateway
+
+  MySubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: '10.0.1.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  MyRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref MyVPC
+
+  MyRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref MyRouteTable
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref MyInternetGateway
+
+  MySubnetRouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref MySubnet
+      RouteTableId: !Ref MyRouteTable
+
+  MySecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: "Permitir acceso HTTP y SSH"
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: '0.0.0.0/0'  # Permitir SSH desde cualquier IP
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          CidrIp: '0.0.0.0/0'  # Permitir acceso a la aplicación
+
+  MyEC2Instance:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      InstanceType: 't2.micro'  # Tipo de instancia
+      KeyName: 'canvasapi'     # Cambia por el nombre de tu par de claves
+      ImageId: 'ami-0866a3c8686eaeeba'
+      SecurityGroupIds:
+        - !Ref MySecurityGroup
+      SubnetId: !Ref MySubnet
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      UserData: 
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # Instalar Docker
+          apt-get update
+          apt-get install -y docker.io git
+          systemctl start docker
+          systemctl enable docker
+
+          # Clonar el repositorio que contiene tu Dockerfile
+          git clone --branch dev https://github.com/josearcos2023/thesisBackCanvasApi.git /app
+
+  EC2InstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Roles: 
+        - !Ref EC2Role
+
+  EC2Role:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'DockerAccess'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'ec2:DescribeInstances'
+                  - 'ec2:DescribeSecurityGroups'
+                  - 'ec2:CreateTags'
+                Resource: '*'
+
+Outputs:
+  InstancePublicIP:
+    Description: "IP Público de la instancia"
+    Value: !GetAtt MyEC2Instance.PublicIp
